@@ -1,0 +1,15 @@
+pandas
+numpy
+matplotlib
+seaborn
+plotly
+scikit-learn
+jupyter
+notebook
+streamlit
+fastapi
+uvicorn
+docker
+pyyaml
+faiss-cpu
+sentence-transformers

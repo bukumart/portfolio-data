@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.ipynb_checkpoints
+
+# Virtual environments
+env/
+venv/
+.venv/
+
+# OS
+.DS_Store
+
+# Data
+datasets/raw/
+datasets/*/*.zip
+datasets/*/*.csv
+
+# Model artifacts
+*.pkl
+*.h5
+*.onnx
+
+# Logs
+logs/
