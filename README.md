@@ -11,12 +11,17 @@ Repository yang berisi kumpulan proyek end-to-end di bidang Data Analyst, Data E
 ```
 
 portfolio-data/
-├── projects/          # Folder berisi proyek berdasarkan role
-├── docs/              # Dokumentasi, diagram, laporan
-├── datasets/          # Dataset sample / raw
-├── notebooks/         # Jupyter notebook tiap role
-├── scripts/           # Utility scripts / preprocessing
-└── requirements.txt   # Dependensi Python
+├── projects/               # Folder berisi proyek berdasarkan role
+│   ├── project-01/
+│   │   ├── datasets/       # Dataset sample / raw
+│   │   ├── notebooks/      # Jupyter notebook tiap project
+│   │   ├── scripts/        # Utility scripts / preprocessing
+│   │   └── ...
+│   │
+│   ├── project-02/
+│   └── ...
+├── docs/                   # Dokumentasi, diagram, laporan
+└── requirements.txt        # Dependensi Python
 
 ```
 
