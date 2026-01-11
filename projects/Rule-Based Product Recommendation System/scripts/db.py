@@ -113,7 +113,7 @@ class Connections:
 
     def db4(dbName=""):
         return newConnection(
-            con="DB4",
+            con="db4",
             user=USERNAME_DB4,
             password=PASSWORD_DB4,
             host=HOST_DB4,

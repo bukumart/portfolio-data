@@ -1,3 +1,7 @@
+import pandas as pd
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import petl as etl
+
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy import MetaData, Table
 from datetime import datetime
@@ -154,6 +158,95 @@ def upsertDBv3(df, tableName, con, excludedColumns=[], metadata_obj="-"):
             delta=delta, endTime=endTime
         )
     )
+
+def fetch_schema(con, sql):
+    """Fungsi untuk eksekusi query per engine."""
+    df = pd.read_sql(con=con['engine'], sql=sql)
+    df = df[df['dbName'].str[:4] == 'fnb_']  # filter fnb_
+    df['con'] = con['name']
+    return df
+
+def load_schema(cons, schema, max_workers=8, batch_size=5):
+    print("Loading Schema (ThreadPool + Batching + Multi-Engine)...")
+
+    results = []
+
+    # Batching kons
+    for i in range(0, len(cons), batch_size):
+        batch = cons[i:i+batch_size]
+        print(f"\tProcessing batch {i//batch_size + 1} ({len(batch)} engines)...")
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_con = {
+                executor.submit(fetch_schema, con, schema): con 
+                for con in batch
+            }
+
+            for future in as_completed(future_to_con):
+                con = future_to_con[future]
+                try:
+                    df = future.result()
+                    results.append(df)
+                except Exception as e:
+                    print(f"\tError on {con['name']}: {e}")
+
+    # Gabung semua hasil
+    if results:
+        return pd.concat(results, ignore_index=True)
+    else:
+        return pd.DataFrame()
+
+def run_query(engine, query):
+    """Execute query and return dataframe."""
+    return etl.fromdb(dbo=engine, query=query).todataframe()
+
+def extract_data_parallel(dfListDB, cons, max_workers=10, batch_size=20):
+    print(f"{datetime.today()} - Extracting data (ThreadPool + Batching + Multi-Engine)...")
+
+    df_results = []
+
+    # Pre-map engine per name (lebih cepat lookup)
+    engine_map = {c['name']: c['engine'] for c in cons}
+
+    total = len(dfListDB)
+    total_batches = (total + batch_size - 1) // batch_size
+
+    for batch_idx, start in enumerate(range(0, total, batch_size), 1):
+        end = min(start + batch_size, total)
+        batch = dfListDB.iloc[start:end]
+
+        print(f"\t{datetime.today().time()} - Processing batch {batch_idx}/{total_batches} ({len(batch)} rows)...")
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {}
+
+            for idx, row in batch.iterrows():
+                engine = engine_map[row["con"]]
+                query = row["query"]
+                fut = executor.submit(run_query, engine, query)
+                futures[fut] = row
+
+            # Collect responses
+            for fut in as_completed(futures):
+                row = futures[fut]
+
+                try:
+                    temp = fut.result()
+
+                    # === APPLY FILTERING DI SINI ===
+                    temp = temp[~temp["salesNum"].isna()]       # Remove NULL salesNum
+                    temp = temp[temp["menuID"].str.contains(",")]  # menuID must contain comma
+
+                    df_results.append(temp)
+
+                except Exception as e:
+                    print(f"\tError con={row['con']}, db={row['dbName']}: {e}")
+
+    # Merge final results
+    if df_results:
+        return pd.concat(df_results, ignore_index=True)
+    else:
+        return pd.DataFrame()
 
 def sendMessageToGoogleChat(
     url=Webhooks_GCHAT,
