@@ -6,6 +6,7 @@ from sqlalchemy.dialects.mysql import insert
 from sqlalchemy import MetaData, Table
 from datetime import datetime
 
+import json
 from json import dumps
 from httplib2 import Http
 
@@ -247,6 +248,55 @@ def extract_data_parallel(dfListDB, cons, max_workers=10, batch_size=20):
         return pd.concat(df_results, ignore_index=True)
     else:
         return pd.DataFrame()
+    
+MAX_WORKERS_PARSING = 20
+BATCH_SIZE_PARSING = 5000
+
+def extract_batch(df_batch):
+    """Extract salesNum & menuID dari 1 batch dataframe."""
+    results = []
+
+    for _, row in df_batch.iterrows():
+        salesNum = row['salesNum']
+        data = json.loads(row['orderData'])
+
+        for m in data.get('salesMenu', []):
+            results.append((salesNum, m.get('menuID')))
+
+    return results
+
+def process_order_data(dfResult):
+    batches = [
+        dfResult[i:i+BATCH_SIZE_PARSING]
+        for i in range(0, len(dfResult), BATCH_SIZE_PARSING)
+    ]
+
+    all_results = []
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS_PARSING) as executor:
+        futures = [executor.submit(extract_batch, batch) for batch in batches]
+
+        for f in futures:
+            all_results.extend(f.result())
+
+    df_salesMenu = pd.DataFrame(all_results, columns=['salesNum', 'menuID'])
+
+    df_grouped = (
+        df_salesMenu
+        .groupby('salesNum')['menuID']
+        .agg(lambda x: ', '.join(map(str, x)))
+        .reset_index()
+    )
+
+    df_multi = df_grouped[df_grouped['menuID'].str.contains(',')]
+
+    df_final = df_multi.merge(
+        dfResult.drop(columns=['orderData']),
+        on='salesNum',
+        how='left'
+    )
+
+    return df_final
 
 def sendMessageToGoogleChat(
     url=Webhooks_GCHAT,
