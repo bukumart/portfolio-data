@@ -5,6 +5,8 @@ import petl as etl
 from sqlalchemy.dialects.mysql import insert
 from sqlalchemy import MetaData, Table
 from datetime import datetime
+from db import Connections
+from itertools import combinations
 
 import json
 from json import dumps
@@ -297,6 +299,121 @@ def process_order_data(dfResult):
     )
 
     return df_final
+
+dwh_menu = Connections.dwh('esb_devMenuNewsletter')
+
+def process_outlet(data, dfMenuPairing, column_mapping1, column_mapping2):
+    dbName = data['dbName']
+    companyCode = data['companyCode']
+    branchID = data['branchID']
+    branchCode = data['branchCode']
+
+    dfPairFilt = dfMenuPairing[
+        (dfMenuPairing['dbName'] == dbName) &
+        (dfMenuPairing['branchID'] == branchID)
+    ]
+
+    pairings = []
+    for menu_ids in dfPairFilt['menuIDSplit']:
+        pairings.extend(combinations(menu_ids, 2))
+
+    if not pairings:
+        return pd.DataFrame()
+
+    pairing_counts = pd.DataFrame()
+    pairing_counts[['menuID', 'pairingCount']] = (
+        pd.Series(pairings).value_counts().reset_index()
+    )
+
+    pairing_counts[['menuID1', 'menuID2']] = pairing_counts['menuID'].apply(pd.Series)
+    pairing_counts = pairing_counts.drop('menuID', axis=1)
+
+    # mirror pairs
+    pairing_counts1 = pairing_counts.rename(columns=column_mapping1).copy()
+    pairing_counts2 = pairing_counts.rename(columns=column_mapping2).copy()
+
+    df_pairingMenu = pd.concat([pairing_counts1, pairing_counts2], ignore_index=True)
+    df_pairingMenu = df_pairingMenu.groupby(['menuID', 'menuIDRelated'], as_index=False).agg({'pairingCount': 'sum'})
+    df_pairingMenu['menuRelatedRank'] = df_pairingMenu.groupby('menuID')['pairingCount'].rank(
+        ascending=False, method='first'
+    )
+
+    df_pairingMenuTop = df_pairingMenu[df_pairingMenu['menuRelatedRank'] <= 5]
+
+    # add metadata
+    df_pairingMenuTop = df_pairingMenuTop.assign(
+        companyCode=companyCode,
+        branchCode=branchCode,
+        dbName=dbName,
+        branchID=branchID
+    )
+
+    return df_pairingMenuTop
+
+def process_company(row, column_mapping1, column_mapping2):
+    dfMenuPairing = etl.fromdb(
+        dbo=dwh_menu,
+        query=row.query
+    ).todataframe()
+
+    # split menuID
+    dfMenuPairing['menuIDSplit'] = dfMenuPairing['menuID'].apply(
+        lambda x: list(
+            set(int(item.strip(',')) for item in x.split(', ') if item.strip(','))
+        )
+    )
+
+    df_outlet = dfMenuPairing[['dbName', 'companyCode', 'branchCode', 'branchID']] \
+                    .drop_duplicates().reset_index(drop=True)
+
+    result_outlet = []
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = []
+        for _, data in df_outlet.iterrows():
+            futures.append(
+                executor.submit(
+                    process_outlet,
+                    data,
+                    dfMenuPairing,
+                    column_mapping1,
+                    column_mapping2
+                )
+            )
+
+        for f in futures:
+            result_outlet.append(f.result())
+
+    if result_outlet:
+        return pd.concat(result_outlet, ignore_index=True)
+    return pd.DataFrame()
+
+def run_parallel(df_uniqueCompany, batch_size=5):
+    print(f"{datetime.today()} - Extracting data...")
+
+    column_mapping1 = {'menuID1': 'menuID', 'menuID2': 'menuIDRelated'}
+    column_mapping2 = {'menuID2': 'menuID', 'menuID1': 'menuIDRelated'}
+
+    df_results = []
+    total = len(df_uniqueCompany)
+
+    # batching per perusahaan
+    for start in range(0, total, batch_size):
+        end = min(start + batch_size, total)
+        batch = df_uniqueCompany.iloc[start:end]
+
+        print(f"\nProcessing batch {start//batch_size + 1} ({end}/{total})...")
+
+        with ThreadPoolExecutor(max_workers=batch_size) as executor:
+            futures = [
+                executor.submit(process_company, row, column_mapping1, column_mapping2)
+                for row in batch.itertuples()
+            ]
+
+            for f in futures:
+                df_results.append(f.result())
+
+    return pd.concat(df_results, ignore_index=True)
 
 def sendMessageToGoogleChat(
     url=Webhooks_GCHAT,

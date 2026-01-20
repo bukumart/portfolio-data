@@ -1,0 +1,1 @@
+truncate table fact_topmenurelated
